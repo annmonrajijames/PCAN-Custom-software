@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import can
 
-# --- This function creates the parameter configuration window ---
 def create_parameter_window():
     param_win = tk.Toplevel(root)
     param_win.title("Create Parameter")
@@ -42,7 +41,7 @@ def create_parameter_window():
 
     # Mapping frame: This area will hold the dropdowns to choose the bit/byte positions.
     mapping_frame = tk.Frame(param_win)
-    mapping_frame.grid(row=5, column=0, columnspan=2, pady=10)
+    mapping_frame.grid(row=5, column=0, columnspan=3, pady=10)
 
     # Update the mapping options based on the chosen size.
     def update_mapping_options(*args):
@@ -76,10 +75,17 @@ def create_parameter_window():
     size_var.trace("w", update_mapping_options)
     update_mapping_options()  # initialize mapping options
 
-    # Slider for parameter value
+    # Create a shared variable for slider and entry
+    param_value_var = tk.IntVar(value=0)
+
+    # Label for parameter value
     tk.Label(param_win, text="Parameter Value:").grid(row=6, column=0, sticky="w", padx=5, pady=2)
-    slider = tk.Scale(param_win, from_=0, to=100, orient=tk.HORIZONTAL)
-    slider.grid(row=6, column=1, padx=5, pady=2)
+    # Slider for parameter value
+    slider = tk.Scale(param_win, variable=param_value_var, from_=0, to=100, orient=tk.HORIZONTAL)
+    slider.grid(row=6, column=1, padx=5, pady=2, sticky="we")
+    # Entry box for parameter value (synchronized with the slider)
+    entry = tk.Entry(param_win, textvariable=param_value_var, width=10)
+    entry.grid(row=6, column=2, padx=5, pady=2)
 
     # Update the slider range based on parameter size and type.
     def update_slider_range(*args):
@@ -97,12 +103,16 @@ def create_parameter_window():
             else:
                 min_val, max_val = -(2 ** (8 * num_bytes - 1)), (2 ** (8 * num_bytes - 1)) - 1
         slider.config(from_=min_val, to=max_val)
+        # Adjust the shared value if it's out of the new range.
+        current_val = param_value_var.get()
+        if current_val < min_val or current_val > max_val:
+            param_value_var.set(min_val)
 
     size_var.trace("w", update_slider_range)
     type_var.trace("w", update_slider_range)
     update_slider_range()
 
-    # --- Function to encode the slider value into an 8-byte CAN frame ---
+    # --- Function to encode the slider/entry value into an 8-byte CAN frame ---
     def encode_parameter():
         # Retrieve and validate the CAN ID input.
         try:
@@ -122,8 +132,8 @@ def create_parameter_window():
             messagebox.showerror("Error", "Invalid resolution")
             return
 
-        # Get the slider value and divide by resolution
-        raw_value = slider.get() / resolution
+        # Get the current value from the shared variable, divided by resolution.
+        raw_value = param_value_var.get() / resolution
         raw_value = int(round(raw_value))
 
         size_str = size_var.get()
@@ -180,7 +190,7 @@ def create_parameter_window():
 
     # Send button to encode (and optionally send) the parameter value.
     send_button = tk.Button(param_win, text="Send", command=encode_parameter)
-    send_button.grid(row=7, column=0, columnspan=2, pady=10)
+    send_button.grid(row=7, column=0, columnspan=3, pady=10)
 
 # --- Main Window Setup ---
 root = tk.Tk()
