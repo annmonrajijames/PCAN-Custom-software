@@ -390,13 +390,38 @@ def add_saved_parameter(config):
 # Global list to hold SavedParameter objects.
 saved_parameters = []
 
-# ---------- Main Window Setup ----------
+# ---------- Main Window Setup with Scrollbar ----------
 root = tk.Tk()
 root.title("CAN Parameter Creator")
+
+# Button to open the Parameter Editor
 create_button = tk.Button(root, text="Create Parameter", command=open_parameter_editor, width=20)
 create_button.pack(pady=10)
-saved_parameters_frame = tk.LabelFrame(root, text="Saved Parameters", padx=5, pady=5)
-saved_parameters_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+# Create a container frame to hold the canvas and scrollbar.
+container = tk.Frame(root)
+container.pack(fill="both", expand=True, padx=10, pady=10)
+
+# Create a canvas in the container.
+scroll_canvas = tk.Canvas(container)
+scroll_canvas.pack(side="left", fill="both", expand=True)
+
+# Add a vertical scrollbar to the container, linked to the canvas.
+scrollbar = tk.Scrollbar(container, orient="vertical", command=scroll_canvas.yview)
+scrollbar.pack(side="right", fill="y")
+scroll_canvas.configure(yscrollcommand=scrollbar.set)
+
+# Create a frame inside the canvas to hold saved parameters.
+# This frame will be our new saved_parameters_frame.
+saved_parameters_frame = tk.Frame(scroll_canvas)
+
+# Create a window in the canvas to hold the frame.
+scroll_canvas.create_window((0, 0), window=saved_parameters_frame, anchor="nw")
+
+# Update the scrollregion when the size of saved_parameters_frame changes.
+def on_frame_configure(event):
+    scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+saved_parameters_frame.bind("<Configure>", on_frame_configure)
 
 def on_closing():
     for can_id in list(global_transmissions.keys()):
