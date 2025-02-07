@@ -67,14 +67,14 @@ class SavedParameter:
     def __init__(self, parent, config):
         """
         config is a dictionary with keys:
-          name, can_id, size, type, resolution, mapping (list),
+          name, can_id, size, type, resolution, mapping (list), 
           target_byte (if bit parameter), cycle_time, and initial_value.
         """
         self.parent = parent
         self.config = config.copy()
         self.enabled = False
         self.value_var = tk.IntVar(value=config.get("initial_value", 0))
-        # Compute slider range from the config.
+        # Compute slider range based on configuration.
         min_val, max_val = compute_slider_range(config)
         self.frame = tk.Frame(parent, bd=2, relief=tk.GROOVE, padx=5, pady=5)
         self.label = tk.Label(self.frame, text=f"{config['name']} (CAN ID: {hex(config['can_id'])})")
@@ -89,6 +89,8 @@ class SavedParameter:
         self.cycle_time_var = tk.StringVar(value=str(config.get("cycle_time", 1000)))
         self.cycle_time_entry = tk.Entry(self.frame, textvariable=self.cycle_time_var, width=8)
         self.cycle_time_entry.grid(row=2, column=1, sticky="we")
+        # Bind an event so that when user changes cycle time and leaves the field, we update it.
+        self.cycle_time_entry.bind("<FocusOut>", self.update_cycle_time)
         self.enable_button = tk.Button(self.frame, text="Enable", command=self.toggle_enable, width=10)
         self.enable_button.grid(row=3, column=0, padx=5, pady=5)
         self.edit_button = tk.Button(self.frame, text="Edit", command=self.edit, width=10)
@@ -129,6 +131,23 @@ class SavedParameter:
                     data_payload[byte_pos] = param_bytes[i]
         return data_payload
 
+    def update_cycle_time(self, event=None):
+        """When the cycle time field loses focus, update the global transmission if enabled."""
+        try:
+            new_cycle_time = float(self.cycle_time_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid cycle time")
+            return
+        self.config["cycle_time"] = new_cycle_time
+        if self.enabled:
+            can_id = self.config["can_id"]
+            if can_id in global_transmissions:
+                global_transmissions[can_id]["cycle_time"] = new_cycle_time
+                if global_transmissions[can_id]["job"]:
+                    root.after_cancel(global_transmissions[can_id]["job"])
+                global_transmit(can_id)
+                print(f"Updated cycle time for CAN ID {hex(can_id)} to {new_cycle_time} ms.")
+
     def toggle_enable(self):
         if not self.enabled:
             try:
@@ -140,7 +159,6 @@ class SavedParameter:
             def param_func():
                 return self.get_payload()
             self.param_func = param_func
-            # Debug print
             print(f"Enabling parameter '{self.config['name']}' on CAN ID {hex(can_id)} with cycle time {cycle_time_ms} ms.")
             if can_id in global_transmissions:
                 if global_transmissions[can_id]["cycle_time"] != cycle_time_ms:
@@ -222,8 +240,7 @@ def open_parameter_editor(saved_param=None):
         mapping_vars = []
         if "bit" in size_str:
             num_bits = int(size_str.split()[0])
-            tk.Label(mapping_frame, text="Select Bit Positions (order):")\
-              .grid(row=0, column=0, columnspan=num_bits)
+            tk.Label(mapping_frame, text="Select Bit Positions (order):").grid(row=0, column=0, columnspan=num_bits)
             for i in range(num_bits):
                 var = tk.StringVar(value="0")
                 mapping_vars.append(var)
@@ -232,8 +249,7 @@ def open_parameter_editor(saved_param=None):
                 bit_menu.grid(row=1, column=i, padx=2)
         else:
             num_bytes = int(size_str.split()[0])
-            tk.Label(mapping_frame, text="Select Byte Positions (order):")\
-              .grid(row=0, column=0, columnspan=num_bytes)
+            tk.Label(mapping_frame, text="Select Byte Positions (order):").grid(row=0, column=0, columnspan=num_bytes)
             for i in range(num_bytes):
                 var = tk.StringVar(value="0")
                 mapping_vars.append(var)
@@ -343,6 +359,16 @@ def open_parameter_editor(saved_param=None):
             # Update slider range in the saved parameter widget.
             min_val, max_val = compute_slider_range(new_config)
             saved_param.slider.config(from_=min_val, to=max_val)
+            # If the parameter is enabled, update the global transmission's cycle time.
+            if saved_param.enabled:
+                can_id = new_config["can_id"]
+                new_cycle_time = new_config["cycle_time"]
+                if can_id in global_transmissions:
+                    global_transmissions[can_id]["cycle_time"] = new_cycle_time
+                    if global_transmissions[can_id]["job"]:
+                        root.after_cancel(global_transmissions[can_id]["job"])
+                    global_transmit(can_id)
+                    print(f"Edited parameter: Updated cycle time for CAN ID {hex(can_id)} to {new_cycle_time} ms.")
         else:
             new_config["initial_value"] = value_var.get()
             add_saved_parameter(new_config)
