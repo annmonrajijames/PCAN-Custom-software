@@ -79,13 +79,30 @@ def create_parameter_window():
     size_var.trace("w", update_mapping_options)
     update_mapping_options()
 
+    # --- Target Byte Field for Bit Parameters ---
+    # This field is only applicable if the parameter size contains "bit"
+    bit_target_var = tk.StringVar(value="0")
+    bit_target_label = tk.Label(param_win, text="Target Byte for Bit Parameter:")
+    bit_target_combo = ttk.Combobox(param_win, textvariable=bit_target_var, values=[str(x) for x in range(8)], state="readonly", width=10)
+
+    def update_bit_target_visibility(*args):
+        if "bit" in size_var.get():
+            bit_target_label.grid(row=6, column=0, sticky="w", padx=5, pady=2)
+            bit_target_combo.grid(row=6, column=1, padx=5, pady=2)
+        else:
+            bit_target_label.grid_forget()
+            bit_target_combo.grid_forget()
+
+    size_var.trace("w", update_bit_target_visibility)
+    update_bit_target_visibility()
+
     # --- Parameter Value (Slider and Entry) ---
-    tk.Label(param_win, text="Parameter Value:").grid(row=6, column=0, sticky="w", padx=5, pady=2)
+    tk.Label(param_win, text="Parameter Value:").grid(row=7, column=0, sticky="w", padx=5, pady=2)
     param_value_var = tk.IntVar(value=0)
     slider = tk.Scale(param_win, variable=param_value_var, from_=0, to=100, orient=tk.HORIZONTAL)
-    slider.grid(row=6, column=1, padx=5, pady=2, sticky="we")
+    slider.grid(row=7, column=1, padx=5, pady=2, sticky="we")
     entry = tk.Entry(param_win, textvariable=param_value_var, width=10)
-    entry.grid(row=6, column=2, padx=5, pady=2)
+    entry.grid(row=7, column=2, padx=5, pady=2)
 
     def update_slider_range(*args):
         size_str = size_var.get()
@@ -111,10 +128,10 @@ def create_parameter_window():
     update_slider_range()
 
     # --- Cycle Time Field ---
-    tk.Label(param_win, text="Cycle Time (ms):").grid(row=7, column=0, sticky="w", padx=5, pady=2)
+    tk.Label(param_win, text="Cycle Time (ms):").grid(row=8, column=0, sticky="w", padx=5, pady=2)
     cycle_time_entry = tk.Entry(param_win)
     cycle_time_entry.insert(0, "1000")
-    cycle_time_entry.grid(row=7, column=1, padx=5, pady=2)
+    cycle_time_entry.grid(row=8, column=1, padx=5, pady=2)
 
     # Global variable for transmission job (for after() scheduling) in this window
     param_win.transmit_job = None
@@ -156,7 +173,9 @@ def create_parameter_window():
                 bit_val = int(bin_str[i])
                 if bit_val:
                     byte_val |= (1 << bit_pos)
-            data_payload[0] = byte_val
+            # Use the target byte selected by the user instead of hardcoding byte 0.
+            target_byte = int(bit_target_var.get())
+            data_payload[target_byte] = byte_val
         else:
             num_bytes = int(size_str.split()[0])
             if type_var.get() == "Signed" and raw_value < 0:
@@ -216,11 +235,10 @@ def create_parameter_window():
         if param_win.transmit_job is not None:
             param_win.after_cancel(param_win.transmit_job)
             param_win.transmit_job = None
-        # Do not shut down the global bus here so that other windows remain active.
 
     # --- Buttons for Sending ---
     btn_frame = tk.Frame(param_win)
-    btn_frame.grid(row=8, column=0, columnspan=3, pady=10)
+    btn_frame.grid(row=9, column=0, columnspan=3, pady=10)
     send_once_btn = tk.Button(btn_frame, text="Send Once", command=send_once, width=15)
     send_once_btn.grid(row=0, column=0, padx=5)
     start_btn = tk.Button(btn_frame, text="Start Transmission", command=start_transmission, width=15)
