@@ -2,6 +2,20 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import can
 
+# Global bus instance (shared among all parameter windows)
+global_bus = None
+
+def get_global_bus():
+    """Return the shared PCAN bus instance; create it if not already created."""
+    global global_bus
+    if global_bus is None:
+        try:
+            global_bus = can.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=500000)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to initialize CAN bus: {e}")
+            return None
+    return global_bus
+
 def create_parameter_window():
     param_win = tk.Toplevel(root)
     param_win.title("Create Parameter")
@@ -102,18 +116,8 @@ def create_parameter_window():
     cycle_time_entry.insert(0, "1000")
     cycle_time_entry.grid(row=7, column=1, padx=5, pady=2)
 
-    # Global variable for transmission job (for after() scheduling)
+    # Global variable for transmission job (for after() scheduling) in this window
     param_win.transmit_job = None
-
-    # --- Persistent PCAN Bus Retrieval ---
-    def get_bus():
-        if not hasattr(param_win, 'bus'):
-            try:
-                param_win.bus = can.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=500000)
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to initialize CAN bus: {e}")
-                return None
-        return param_win.bus
 
     # --- Function to compute the encoded CAN frame ---
     def get_encoded_message():
@@ -174,7 +178,7 @@ def create_parameter_window():
         if encoded is None:
             return
         can_id, data_payload = encoded
-        bus = get_bus()
+        bus = get_global_bus()
         if bus is None:
             return
         message = can.Message(arbitration_id=can_id, data=data_payload, is_extended_id=(can_id > 0x7FF))
@@ -190,7 +194,7 @@ def create_parameter_window():
         if encoded is None:
             return
         can_id, data_payload = encoded
-        bus = get_bus()
+        bus = get_global_bus()
         if bus is None:
             return
         message = can.Message(arbitration_id=can_id, data=data_payload, is_extended_id=(can_id > 0x7FF))
@@ -212,13 +216,7 @@ def create_parameter_window():
         if param_win.transmit_job is not None:
             param_win.after_cancel(param_win.transmit_job)
             param_win.transmit_job = None
-        # Shut down the persistent bus if it exists.
-        if hasattr(param_win, 'bus'):
-            try:
-                param_win.bus.shutdown()
-            except Exception as e:
-                messagebox.showerror("Error", f"Error during bus shutdown: {e}")
-            del param_win.bus
+        # Do not shut down the global bus here so that other windows remain active.
 
     # --- Buttons for Sending ---
     btn_frame = tk.Frame(param_win)
@@ -235,4 +233,15 @@ root = tk.Tk()
 root.title("CAN Parameter Creator")
 create_button = tk.Button(root, text="Create Parameter", command=create_parameter_window, width=20)
 create_button.pack(pady=20)
+
+def on_closing():
+    global global_bus
+    if global_bus is not None:
+        try:
+            global_bus.shutdown()
+        except Exception as e:
+            print("Error during bus shutdown:", e)
+    root.destroy()
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
 root.mainloop()
