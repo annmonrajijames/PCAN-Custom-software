@@ -6,17 +6,15 @@ def create_parameter_window():
     param_win = tk.Toplevel(root)
     param_win.title("Create Parameter")
 
-    # Parameter name field
+    # --- Parameter Details ---
     tk.Label(param_win, text="Parameter Name:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
     param_name_entry = tk.Entry(param_win)
     param_name_entry.grid(row=0, column=1, padx=5, pady=2)
 
-    # CAN ID entry (hexadecimal)
     tk.Label(param_win, text="CAN ID (hex):").grid(row=1, column=0, sticky="w", padx=5, pady=2)
     can_id_entry = tk.Entry(param_win)
     can_id_entry.grid(row=1, column=1, padx=5, pady=2)
 
-    # Parameter Size selection
     tk.Label(param_win, text="Parameter Size:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
     size_options = [
         "1 bit", "2 bit", "3 bit", "4 bit", "5 bit", "6 bit", "7 bit", "8 bit",
@@ -26,29 +24,24 @@ def create_parameter_window():
     size_menu = ttk.Combobox(param_win, textvariable=size_var, values=size_options, state="readonly", width=10)
     size_menu.grid(row=2, column=1, padx=5, pady=2)
 
-    # Parameter Type selection: Signed or Unsigned
     tk.Label(param_win, text="Parameter Type:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
     type_options = ["Unsigned", "Signed"]
     type_var = tk.StringVar(value=type_options[0])
     type_menu = ttk.Combobox(param_win, textvariable=type_var, values=type_options, state="readonly", width=10)
     type_menu.grid(row=3, column=1, padx=5, pady=2)
 
-    # Resolution entry field
     tk.Label(param_win, text="Resolution:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
     resolution_entry = tk.Entry(param_win)
     resolution_entry.insert(0, "1")
     resolution_entry.grid(row=4, column=1, padx=5, pady=2)
 
-    # Mapping frame: This area will hold the dropdowns to choose the bit/byte positions.
+    # --- Mapping Options ---
     mapping_frame = tk.Frame(param_win)
     mapping_frame.grid(row=5, column=0, columnspan=3, pady=10)
 
-    # Update the mapping options based on the chosen size.
     def update_mapping_options(*args):
-        # Remove any old widgets from the mapping frame.
         for widget in mapping_frame.winfo_children():
             widget.destroy()
-
         size_str = size_var.get()
         mapping_vars = []
         if "bit" in size_str:
@@ -57,37 +50,29 @@ def create_parameter_window():
             for i in range(num_bits):
                 var = tk.StringVar(value="0")
                 mapping_vars.append(var)
-                # Dropdown for each bit: options 0 through 7 (bit positions)
                 bit_menu = ttk.Combobox(mapping_frame, textvariable=var, values=[str(x) for x in range(8)], state="readonly", width=3)
                 bit_menu.grid(row=1, column=i, padx=2)
         else:
-            # For byte parameters (e.g., "2 byte", "3 byte", etc.)
             num_bytes = int(size_str.split()[0])
             tk.Label(mapping_frame, text="Select Byte Positions (order):").grid(row=0, column=0, columnspan=num_bytes)
             for i in range(num_bytes):
                 var = tk.StringVar(value="0")
                 mapping_vars.append(var)
-                # Dropdown for each byte: options 0 through 7 (byte positions)
                 byte_menu = ttk.Combobox(mapping_frame, textvariable=var, values=[str(x) for x in range(8)], state="readonly", width=3)
                 byte_menu.grid(row=1, column=i, padx=2)
         mapping_frame.mapping_vars = mapping_vars
 
     size_var.trace("w", update_mapping_options)
-    update_mapping_options()  # initialize mapping options
+    update_mapping_options()
 
-    # Create a shared variable for slider and entry
-    param_value_var = tk.IntVar(value=0)
-
-    # Label for parameter value
+    # --- Parameter Value (Slider and Entry) ---
     tk.Label(param_win, text="Parameter Value:").grid(row=6, column=0, sticky="w", padx=5, pady=2)
-    # Slider for parameter value
+    param_value_var = tk.IntVar(value=0)
     slider = tk.Scale(param_win, variable=param_value_var, from_=0, to=100, orient=tk.HORIZONTAL)
     slider.grid(row=6, column=1, padx=5, pady=2, sticky="we")
-    # Entry box for parameter value (synchronized with the slider)
     entry = tk.Entry(param_win, textvariable=param_value_var, width=10)
     entry.grid(row=6, column=2, padx=5, pady=2)
 
-    # Update the slider range based on parameter size and type.
     def update_slider_range(*args):
         size_str = size_var.get()
         if "bit" in size_str:
@@ -103,7 +88,6 @@ def create_parameter_window():
             else:
                 min_val, max_val = -(2 ** (8 * num_bytes - 1)), (2 ** (8 * num_bytes - 1)) - 1
         slider.config(from_=min_val, to=max_val)
-        # Adjust the shared value if it's out of the new range.
         current_val = param_value_var.get()
         if current_val < min_val or current_val > max_val:
             param_value_var.set(min_val)
@@ -112,9 +96,27 @@ def create_parameter_window():
     type_var.trace("w", update_slider_range)
     update_slider_range()
 
-    # --- Function to encode the slider/entry value into an 8-byte CAN frame ---
-    def encode_parameter():
-        # Retrieve and validate the CAN ID input.
+    # --- Cycle Time Field ---
+    tk.Label(param_win, text="Cycle Time (ms):").grid(row=7, column=0, sticky="w", padx=5, pady=2)
+    cycle_time_entry = tk.Entry(param_win)
+    cycle_time_entry.insert(0, "1000")
+    cycle_time_entry.grid(row=7, column=1, padx=5, pady=2)
+
+    # Global variable for transmission job (for after() scheduling)
+    param_win.transmit_job = None
+
+    # --- Persistent PCAN Bus Retrieval ---
+    def get_bus():
+        if not hasattr(param_win, 'bus'):
+            try:
+                param_win.bus = can.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=500000)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to initialize CAN bus: {e}")
+                return None
+        return param_win.bus
+
+    # --- Function to compute the encoded CAN frame ---
+    def get_encoded_message():
         try:
             can_id_str = can_id_entry.get().strip()
             if can_id_str.startswith("0x") or can_id_str.startswith("0X"):
@@ -123,80 +125,114 @@ def create_parameter_window():
                 can_id = int(can_id_str, 16)
         except ValueError:
             messagebox.showerror("Error", "Invalid CAN ID")
-            return
+            return None
 
-        # Read the resolution and calculate the raw (scaled) value.
         try:
             resolution = float(resolution_entry.get())
         except ValueError:
             messagebox.showerror("Error", "Invalid resolution")
-            return
+            return None
 
-        # Get the current value from the shared variable, divided by resolution.
         raw_value = param_value_var.get() / resolution
         raw_value = int(round(raw_value))
 
         size_str = size_var.get()
-        data_payload = [0] * 8  # start with 8 zeroed bytes
-
+        data_payload = [0] * 8
         if "bit" in size_str:
             param_bits = int(size_str.split()[0])
-            # For unsigned, simply format the value in binary with leading zeros.
-            # For signed, use two's complement if necessary.
             if type_var.get() == "Unsigned":
                 bin_str = format(raw_value, f"0{param_bits}b")
             else:
                 if raw_value < 0:
                     raw_value = (1 << param_bits) + raw_value
                 bin_str = format(raw_value, f"0{param_bits}b")
-            # Map these bits into one byte based on the user-selected bit positions.
             byte_val = 0
             for i, var in enumerate(mapping_frame.mapping_vars):
                 bit_pos = int(var.get())
                 bit_val = int(bin_str[i])
                 if bit_val:
                     byte_val |= (1 << bit_pos)
-            data_payload[0] = byte_val  # here we assume the bit parameter is in byte 0
-
+            data_payload[0] = byte_val
         else:
-            # For byte parameters, determine how many bytes.
             num_bytes = int(size_str.split()[0])
-            # For signed values, convert negative numbers to two's complement.
             if type_var.get() == "Signed" and raw_value < 0:
                 raw_value = (1 << (8 * num_bytes)) + raw_value
-            # Convert the raw value to a bytes object (little-endian is assumed)
             try:
                 param_bytes = list(raw_value.to_bytes(num_bytes, byteorder='little', signed=False))
             except OverflowError:
                 messagebox.showerror("Error", "Value out of range for the specified size")
-                return
-            # Map the parameter bytes into the data payload at the chosen byte positions.
+                return None
             for i, var in enumerate(mapping_frame.mapping_vars):
                 byte_pos = int(var.get())
                 if 0 <= byte_pos < 8:
                     data_payload[byte_pos] = param_bytes[i]
+        return (can_id, data_payload)
 
-        # For demonstration, show the resulting encoded CAN frame.
-        result_str = " ".join(f"{b:02X}" for b in data_payload)
-        messagebox.showinfo("Encoded CAN Frame", f"CAN ID: {can_id_str}\nData: {result_str}")
+    # --- Functions for Transmission ---
+    def send_once():
+        encoded = get_encoded_message()
+        if encoded is None:
+            return
+        can_id, data_payload = encoded
+        bus = get_bus()
+        if bus is None:
+            return
+        message = can.Message(arbitration_id=can_id, data=data_payload, is_extended_id=(can_id > 0x7FF))
+        try:
+            bus.send(message)
+            result_str = " ".join(f"{b:02X}" for b in data_payload)
+            messagebox.showinfo("Success", f"Message sent.\nCAN ID: {can_id_entry.get().strip()}\nData: {result_str}")
+        except can.CanError as e:
+            messagebox.showerror("CAN Error", f"Failed to send message: {e}")
 
-        # Optionally, to send via python-can (requires PCAN drivers and proper configuration):
-        # bus = can.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=500000)
-        # message = can.Message(arbitration_id=can_id, data=data_payload, is_extended_id=(can_id > 0x7FF))
-        # try:
-        #     bus.send(message)
-        # except can.CanError as e:
-        #     messagebox.showerror("CAN Error", f"Failed to send message: {e}")
+    def transmit_message():
+        encoded = get_encoded_message()
+        if encoded is None:
+            return
+        can_id, data_payload = encoded
+        bus = get_bus()
+        if bus is None:
+            return
+        message = can.Message(arbitration_id=can_id, data=data_payload, is_extended_id=(can_id > 0x7FF))
+        try:
+            bus.send(message)
+        except can.CanError as e:
+            messagebox.showerror("CAN Error", f"Failed to send message: {e}")
+        try:
+            cycle_time_ms = float(cycle_time_entry.get())
+        except ValueError:
+            cycle_time_ms = 1000
+        param_win.transmit_job = param_win.after(int(cycle_time_ms), transmit_message)
 
-    # Send button to encode (and optionally send) the parameter value.
-    send_button = tk.Button(param_win, text="Send", command=encode_parameter)
-    send_button.grid(row=7, column=0, columnspan=3, pady=10)
+    def start_transmission():
+        if param_win.transmit_job is None:
+            transmit_message()
+
+    def stop_transmission():
+        if param_win.transmit_job is not None:
+            param_win.after_cancel(param_win.transmit_job)
+            param_win.transmit_job = None
+        # Shut down the persistent bus if it exists.
+        if hasattr(param_win, 'bus'):
+            try:
+                param_win.bus.shutdown()
+            except Exception as e:
+                messagebox.showerror("Error", f"Error during bus shutdown: {e}")
+            del param_win.bus
+
+    # --- Buttons for Sending ---
+    btn_frame = tk.Frame(param_win)
+    btn_frame.grid(row=8, column=0, columnspan=3, pady=10)
+    send_once_btn = tk.Button(btn_frame, text="Send Once", command=send_once, width=15)
+    send_once_btn.grid(row=0, column=0, padx=5)
+    start_btn = tk.Button(btn_frame, text="Start Transmission", command=start_transmission, width=15)
+    start_btn.grid(row=0, column=1, padx=5)
+    stop_btn = tk.Button(btn_frame, text="Stop Transmission", command=stop_transmission, width=15)
+    stop_btn.grid(row=0, column=2, padx=5)
 
 # --- Main Window Setup ---
 root = tk.Tk()
 root.title("CAN Parameter Creator")
-
 create_button = tk.Button(root, text="Create Parameter", command=create_parameter_window, width=20)
 create_button.pack(pady=20)
-
 root.mainloop()
