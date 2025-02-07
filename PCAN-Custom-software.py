@@ -162,8 +162,14 @@ class SavedParameter:
             print(f"Enabling parameter '{self.config['name']}' on CAN ID {hex(can_id)} with cycle time {cycle_time_ms} ms.")
             if can_id in global_transmissions:
                 if global_transmissions[can_id]["cycle_time"] != cycle_time_ms:
-                    messagebox.showerror("Error", "Cycle time must be the same for parameters with the same CAN ID")
-                    return
+                    # Update cycle time for all parameters sharing this CAN ID.
+                    global_transmissions[can_id]["cycle_time"] = cycle_time_ms
+                    for sp in saved_parameters:
+                        if sp.enabled and sp.config["can_id"] == can_id:
+                            sp.cycle_time_var.set(str(cycle_time_ms))
+                    if global_transmissions[can_id]["job"]:
+                        root.after_cancel(global_transmissions[can_id]["job"])
+                    global_transmit(can_id)
                 global_transmissions[can_id]["params"].append(param_func)
             else:
                 global_transmissions[can_id] = {"cycle_time": cycle_time_ms, "params": [param_func], "job": None}
