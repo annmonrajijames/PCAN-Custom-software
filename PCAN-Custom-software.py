@@ -47,20 +47,36 @@ def global_transmit(can_id):
 
 # ---------- Helper: Compute Slider Range ----------
 def compute_slider_range(config):
-    # Only used if minimum and maximum are not provided by the user.
-    size_str = config["size"]
-    if "bit" in size_str:
-        num_bits = int(size_str.split()[0])
-        if config["type"] == "Unsigned":
-            return 0, (2 ** num_bits) - 1
+    # If the user provided explicit min and max values, use them.
+    if "min_value" in config and "max_value" in config:
+        min_str = config["min_value"]
+        max_str = config["max_value"]
+        try:
+            min_val = float(min_str)
+            max_val = float(max_str)
+        except:
+            min_val, max_val = 0, 100
+        if "." in max_str:
+            precision = len(max_str.split(".")[1])
         else:
-            return -(2 ** (num_bits - 1)), (2 ** (num_bits - 1)) - 1
+            precision = 0
+        resolution_val = 10**(-precision) if precision > 0 else 1
+        return min_val, max_val, resolution_val, precision
     else:
-        num_bytes = int(size_str.split()[0])
-        if config["type"] == "Unsigned":
-            return 0, (2 ** (8 * num_bytes)) - 1
+        # Fallback computed range based on size/type.
+        size_str = config["size"]
+        if "bit" in size_str:
+            num_bits = int(size_str.split()[0])
+            if config["type"] == "Unsigned":
+                return 0, (2 ** num_bits) - 1, 1, 0
+            else:
+                return -(2 ** (num_bits - 1)), (2 ** (num_bits - 1)) - 1, 1, 0
         else:
-            return -(2 ** (8 * num_bytes - 1)), (2 ** (8 * num_bytes - 1)) - 1
+            num_bytes = int(size_str.split()[0])
+            if config["type"] == "Unsigned":
+                return 0, (2 ** (8 * num_bytes)) - 1, 1, 0
+            else:
+                return -(2 ** (8 * num_bytes - 1)), (2 ** (8 * num_bytes - 1)) - 1, 1, 0
 
 # ---------- Saved Parameter Class ----------
 class SavedParameter:
@@ -68,28 +84,25 @@ class SavedParameter:
         """
         config is a dictionary with keys:
           name, can_id, size, type, resolution, mapping (list), 
-          target_byte (if bit parameter), cycle_time, 
-          min_value, max_value, and initial_value.
+          target_byte (if bit parameter), cycle_time, min_value, max_value, and initial_value.
         """
         self.parent = parent
         self.config = config.copy()
         self.enabled = False
-        self.value_var = tk.IntVar(value=config.get("initial_value", 0))
-        # Determine slider range: if min_value and max_value are provided, use them;
-        # otherwise, use the computed range.
+        self.value_var = tk.DoubleVar(value=config.get("initial_value", 0))
+        # Determine slider range: use provided min and max if available.
         try:
-            min_val = float(self.config["min_value"])
-            max_val = float(self.config["max_value"])
-        except KeyError:
-            min_val, max_val = compute_slider_range(config)
+            min_val, max_val, res, prec = compute_slider_range(self.config)
+        except Exception:
+            min_val, max_val, res, prec = 0, 100, 1, 0
         self.frame = tk.Frame(parent, bd=2, relief=tk.GROOVE, padx=5, pady=5)
         self.label = tk.Label(self.frame, text=f"{config['name']} (CAN ID: {hex(config['can_id'])})")
         self.label.grid(row=0, column=0, columnspan=3, sticky="w")
         tk.Label(self.frame, text="Value:").grid(row=1, column=0, sticky="w")
         self.slider = tk.Scale(self.frame, variable=self.value_var,
-                               from_=min_val, to=max_val, orient=tk.HORIZONTAL)
+                               from_=min_val, to=max_val, resolution=res, orient=tk.HORIZONTAL)
         self.slider.grid(row=1, column=1, sticky="we")
-        self.entry = tk.Entry(self.frame, textvariable=self.value_var, width=5)
+        self.entry = tk.Entry(self.frame, textvariable=self.value_var, width=10)
         self.entry.grid(row=1, column=2, sticky="e")
         tk.Label(self.frame, text="Cycle Time (ms):").grid(row=2, column=0, sticky="w")
         self.cycle_time_var = tk.StringVar(value=str(config.get("cycle_time", 1000)))
@@ -202,7 +215,7 @@ class SavedParameter:
 def open_parameter_editor(saved_param=None):
     """
     Opens the Parameter Editor window.
-    If saved_param is provided, fields are pre-populated for editing.
+    If saved_param is provided, the fields are pre-populated for editing.
     """
     editor = tk.Toplevel(root)
     editor.title("Parameter Editor")
@@ -298,14 +311,21 @@ def open_parameter_editor(saved_param=None):
     
     # Parameter Value (Slider and Entry) (row 9)
     tk.Label(editor, text="Parameter Value:").grid(row=9, column=0, sticky="w", padx=5, pady=2)
-    value_var = tk.IntVar(value=0)
+    value_var = tk.DoubleVar(value=0)
     def update_slider_range(*args):
         try:
-            min_val = float(min_val_entry.get())
-            max_val = float(max_val_entry.get())
+            min_str = min_val_entry.get()
+            max_str = max_val_entry.get()
+            min_val = float(min_str)
+            max_val = float(max_str)
+            if "." in max_str:
+                precision = len(max_str.split(".")[1])
+            else:
+                precision = 0
+            res = 10**(-precision) if precision > 0 else 1
         except ValueError:
-            min_val, max_val = 0, 100
-        slider.config(from_=min_val, to=max_val)
+            min_val, max_val, res, precision = 0, 100, 1, 0
+        slider.config(from_=min_val, to=max_val, resolution=res)
         cur_val = value_var.get()
         if cur_val < min_val or cur_val > max_val:
             value_var.set(min_val)
@@ -334,7 +354,6 @@ def open_parameter_editor(saved_param=None):
         type_var.set(config["type"])
         resolution_entry.delete(0, tk.END)
         resolution_entry.insert(0, str(config["resolution"]))
-        # If min and max were saved, prepopulate them.
         if "min_value" in config:
             min_val_entry.delete(0, tk.END)
             min_val_entry.insert(0, str(config["min_value"]))
@@ -364,8 +383,11 @@ def open_parameter_editor(saved_param=None):
             messagebox.showerror("Error", "Invalid CAN ID")
             return
         try:
-            min_value = float(min_val_entry.get())
-            max_value = float(max_val_entry.get())
+            min_value = min_val_entry.get()
+            max_value = max_val_entry.get()
+            # We'll store them as strings to preserve formatting.
+            float(min_value)  # Validate conversion.
+            float(max_value)
         except ValueError:
             messagebox.showerror("Error", "Invalid minimum or maximum value")
             return
@@ -387,8 +409,8 @@ def open_parameter_editor(saved_param=None):
             saved_param.cycle_time_var.set(str(new_config["cycle_time"]))
             saved_param.label.config(text=f"{new_config['name']} (CAN ID: {hex(new_config['can_id'])})")
             # Update slider range in the saved parameter widget.
-            saved_min, saved_max = new_config["min_value"], new_config["max_value"]
-            saved_param.slider.config(from_=saved_min, to=saved_max)
+            min_val, max_val, res, prec = compute_slider_range(new_config)
+            saved_param.slider.config(from_=min_val, to=max_val, resolution=res)
         else:
             new_config["initial_value"] = value_var.get()
             add_saved_parameter(new_config)
