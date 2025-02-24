@@ -42,12 +42,12 @@ def global_transmit(can_id):
             print(f"Sent CAN ID {hex(can_id)}: {' '.join(f'{b:02X}' for b in combined_payload)}")
         except can.CanError as e:
             print(f"CAN Error while sending message for {hex(can_id)}: {e}")
-    # Schedule the next transmission.
     job = root.after(int(cycle_time_ms), lambda: global_transmit(can_id))
     global_transmissions[can_id]["job"] = job
 
 # ---------- Helper: Compute Slider Range ----------
 def compute_slider_range(config):
+    # Only used if minimum and maximum are not provided by the user.
     size_str = config["size"]
     if "bit" in size_str:
         num_bits = int(size_str.split()[0])
@@ -68,14 +68,20 @@ class SavedParameter:
         """
         config is a dictionary with keys:
           name, can_id, size, type, resolution, mapping (list), 
-          target_byte (if bit parameter), cycle_time, and initial_value.
+          target_byte (if bit parameter), cycle_time, 
+          min_value, max_value, and initial_value.
         """
         self.parent = parent
         self.config = config.copy()
         self.enabled = False
         self.value_var = tk.IntVar(value=config.get("initial_value", 0))
-        # Compute slider range based on configuration.
-        min_val, max_val = compute_slider_range(config)
+        # Determine slider range: if min_value and max_value are provided, use them;
+        # otherwise, use the computed range.
+        try:
+            min_val = float(self.config["min_value"])
+            max_val = float(self.config["max_value"])
+        except KeyError:
+            min_val, max_val = compute_slider_range(config)
         self.frame = tk.Frame(parent, bd=2, relief=tk.GROOVE, padx=5, pady=5)
         self.label = tk.Label(self.frame, text=f"{config['name']} (CAN ID: {hex(config['can_id'])})")
         self.label.grid(row=0, column=0, columnspan=3, sticky="w")
@@ -89,7 +95,6 @@ class SavedParameter:
         self.cycle_time_var = tk.StringVar(value=str(config.get("cycle_time", 1000)))
         self.cycle_time_entry = tk.Entry(self.frame, textvariable=self.cycle_time_var, width=8)
         self.cycle_time_entry.grid(row=2, column=1, sticky="we")
-        # Bind an event so that when user changes cycle time and leaves the field, we update it.
         self.cycle_time_entry.bind("<FocusOut>", self.update_cycle_time)
         self.enable_button = tk.Button(self.frame, text="Enable", command=self.toggle_enable, width=10)
         self.enable_button.grid(row=3, column=0, padx=5, pady=5)
@@ -132,7 +137,7 @@ class SavedParameter:
         return data_payload
 
     def update_cycle_time(self, event=None):
-        """When the cycle time field loses focus, update the global transmission if enabled."""
+        """Update the global transmission if the cycle time field is changed."""
         try:
             new_cycle_time = float(self.cycle_time_var.get())
         except ValueError:
@@ -162,7 +167,6 @@ class SavedParameter:
             print(f"Enabling parameter '{self.config['name']}' on CAN ID {hex(can_id)} with cycle time {cycle_time_ms} ms.")
             if can_id in global_transmissions:
                 if global_transmissions[can_id]["cycle_time"] != cycle_time_ms:
-                    # Update cycle time for all parameters sharing this CAN ID.
                     global_transmissions[can_id]["cycle_time"] = cycle_time_ms
                     for sp in saved_parameters:
                         if sp.enabled and sp.config["can_id"] == can_id:
@@ -198,7 +202,7 @@ class SavedParameter:
 def open_parameter_editor(saved_param=None):
     """
     Opens the Parameter Editor window.
-    If saved_param is provided, the fields are pre-populated for editing.
+    If saved_param is provided, fields are pre-populated for editing.
     """
     editor = tk.Toplevel(root)
     editor.title("Parameter Editor")
@@ -236,9 +240,20 @@ def open_parameter_editor(saved_param=None):
     resolution_entry.insert(0, "1")
     resolution_entry.grid(row=4, column=1, padx=5, pady=2)
     
-    # Mapping Options
+    # NEW: Minimum and Maximum Value fields
+    tk.Label(editor, text="Minimum Value:").grid(row=5, column=0, sticky="w", padx=5, pady=2)
+    min_val_entry = tk.Entry(editor)
+    min_val_entry.insert(0, "0")
+    min_val_entry.grid(row=5, column=1, padx=5, pady=2)
+    
+    tk.Label(editor, text="Maximum Value:").grid(row=6, column=0, sticky="w", padx=5, pady=2)
+    max_val_entry = tk.Entry(editor)
+    max_val_entry.insert(0, "100")
+    max_val_entry.grid(row=6, column=1, padx=5, pady=2)
+    
+    # Mapping Options (row 7)
     mapping_frame = tk.Frame(editor)
-    mapping_frame.grid(row=5, column=0, columnspan=3, pady=10)
+    mapping_frame.grid(row=7, column=0, columnspan=3, pady=10)
     def update_mapping_options(*args):
         for widget in mapping_frame.winfo_children():
             widget.destroy()
@@ -266,55 +281,49 @@ def open_parameter_editor(saved_param=None):
     size_var.trace("w", update_mapping_options)
     update_mapping_options()
     
-    # Target Byte for Bit Parameter
+    # Target Byte for Bit Parameter (row 8)
     bit_target_var = tk.StringVar(value="0")
     bit_target_label = tk.Label(editor, text="Target Byte for Bit Parameter:")
     bit_target_combo = ttk.Combobox(editor, textvariable=bit_target_var, values=[str(x) for x in range(8)],
                                     state="readonly", width=10)
     def update_bit_target_visibility(*args):
         if "bit" in size_var.get():
-            bit_target_label.grid(row=6, column=0, sticky="w", padx=5, pady=2)
-            bit_target_combo.grid(row=6, column=1, padx=5, pady=2)
+            bit_target_label.grid(row=8, column=0, sticky="w", padx=5, pady=2)
+            bit_target_combo.grid(row=8, column=1, padx=5, pady=2)
         else:
             bit_target_label.grid_forget()
             bit_target_combo.grid_forget()
     size_var.trace("w", update_bit_target_visibility)
     update_bit_target_visibility()
     
-    # Parameter Value (Slider and Entry)
-    tk.Label(editor, text="Parameter Value:").grid(row=7, column=0, sticky="w", padx=5, pady=2)
+    # Parameter Value (Slider and Entry) (row 9)
+    tk.Label(editor, text="Parameter Value:").grid(row=9, column=0, sticky="w", padx=5, pady=2)
     value_var = tk.IntVar(value=0)
     def update_slider_range(*args):
-        size_str = size_var.get()
-        if "bit" in size_str:
-            num_bits = int(size_str.split()[0])
-            if type_var.get() == "Unsigned":
-                min_val, max_val = 0, (2 ** num_bits) - 1
-            else:
-                min_val, max_val = -(2 ** (num_bits - 1)), (2 ** (num_bits - 1)) - 1
-        else:
-            num_bytes = int(size_str.split()[0])
-            if type_var.get() == "Unsigned":
-                min_val, max_val = 0, (2 ** (8 * num_bytes)) - 1
-            else:
-                min_val, max_val = -(2 ** (8 * num_bytes - 1)), (2 ** (8 * num_bytes - 1)) - 1
+        try:
+            min_val = float(min_val_entry.get())
+            max_val = float(max_val_entry.get())
+        except ValueError:
+            min_val, max_val = 0, 100
         slider.config(from_=min_val, to=max_val)
         cur_val = value_var.get()
         if cur_val < min_val or cur_val > max_val:
             value_var.set(min_val)
     slider = tk.Scale(editor, variable=value_var, from_=0, to=100, orient=tk.HORIZONTAL)
-    slider.grid(row=7, column=1, padx=5, pady=2, sticky="we")
+    slider.grid(row=9, column=1, padx=5, pady=2, sticky="we")
     entry = tk.Entry(editor, textvariable=value_var, width=10)
-    entry.grid(row=7, column=2, padx=5, pady=2)
+    entry.grid(row=9, column=2, padx=5, pady=2)
+    min_val_entry.bind("<FocusOut>", lambda e: update_slider_range())
+    max_val_entry.bind("<FocusOut>", lambda e: update_slider_range())
     size_var.trace("w", update_slider_range)
     type_var.trace("w", update_slider_range)
     update_slider_range()
     
-    # Cycle Time
-    tk.Label(editor, text="Cycle Time (ms):").grid(row=8, column=0, sticky="w", padx=5, pady=2)
+    # Cycle Time (ms) (row 10)
+    tk.Label(editor, text="Cycle Time (ms):").grid(row=10, column=0, sticky="w", padx=5, pady=2)
     cycle_time_entry = tk.Entry(editor)
     cycle_time_entry.insert(0, "1000")
-    cycle_time_entry.grid(row=8, column=1, padx=5, pady=2)
+    cycle_time_entry.grid(row=10, column=1, padx=5, pady=2)
     
     # Prepopulate if editing an existing parameter.
     if saved_param:
@@ -325,6 +334,13 @@ def open_parameter_editor(saved_param=None):
         type_var.set(config["type"])
         resolution_entry.delete(0, tk.END)
         resolution_entry.insert(0, str(config["resolution"]))
+        # If min and max were saved, prepopulate them.
+        if "min_value" in config:
+            min_val_entry.delete(0, tk.END)
+            min_val_entry.insert(0, str(config["min_value"]))
+        if "max_value" in config:
+            max_val_entry.delete(0, tk.END)
+            max_val_entry.insert(0, str(config["max_value"]))
         update_mapping_options()
         for i, var in enumerate(mapping_frame.mapping_vars):
             try:
@@ -347,6 +363,12 @@ def open_parameter_editor(saved_param=None):
         except ValueError:
             messagebox.showerror("Error", "Invalid CAN ID")
             return
+        try:
+            min_value = float(min_val_entry.get())
+            max_value = float(max_val_entry.get())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid minimum or maximum value")
+            return
         new_config = {
             "name": name_entry.get().strip(),
             "can_id": can_id,
@@ -354,7 +376,9 @@ def open_parameter_editor(saved_param=None):
             "type": type_var.get(),
             "resolution": float(resolution_entry.get()),
             "mapping": [int(var.get()) for var in mapping_frame.mapping_vars],
-            "cycle_time": float(cycle_time_entry.get())
+            "cycle_time": float(cycle_time_entry.get()),
+            "min_value": min_value,
+            "max_value": max_value
         }
         if "bit" in size_var.get():
             new_config["target_byte"] = int(bit_target_var.get())
@@ -363,25 +387,15 @@ def open_parameter_editor(saved_param=None):
             saved_param.cycle_time_var.set(str(new_config["cycle_time"]))
             saved_param.label.config(text=f"{new_config['name']} (CAN ID: {hex(new_config['can_id'])})")
             # Update slider range in the saved parameter widget.
-            min_val, max_val = compute_slider_range(new_config)
-            saved_param.slider.config(from_=min_val, to=max_val)
-            # If the parameter is enabled, update the global transmission's cycle time.
-            if saved_param.enabled:
-                can_id = new_config["can_id"]
-                new_cycle_time = new_config["cycle_time"]
-                if can_id in global_transmissions:
-                    global_transmissions[can_id]["cycle_time"] = new_cycle_time
-                    if global_transmissions[can_id]["job"]:
-                        root.after_cancel(global_transmissions[can_id]["job"])
-                    global_transmit(can_id)
-                    print(f"Edited parameter: Updated cycle time for CAN ID {hex(can_id)} to {new_cycle_time} ms.")
+            saved_min, saved_max = new_config["min_value"], new_config["max_value"]
+            saved_param.slider.config(from_=saved_min, to=saved_max)
         else:
             new_config["initial_value"] = value_var.get()
             add_saved_parameter(new_config)
         editor.destroy()
     
     save_button = tk.Button(editor, text="Save", command=save_edits)
-    save_button.grid(row=9, column=0, columnspan=3, pady=10)
+    save_button.grid(row=11, column=0, columnspan=3, pady=10)
 
 def add_saved_parameter(config):
     sp = SavedParameter(saved_parameters_frame, config)
