@@ -586,8 +586,30 @@ create_numeric_button = tk.Button(top_frame, text="Create Parameter", command=op
 create_numeric_button.pack(side="left", padx=5)
 create_ascii_button = tk.Button(top_frame, text="Create ASCII parameter", command=open_ascii_parameter_editor, width=20)
 create_ascii_button.pack(side="left", padx=5)
-saved_parameters_frame = tk.LabelFrame(root, text="Saved Parameters", padx=5, pady=5)
-saved_parameters_frame.pack(fill="both", expand=True, padx=10, pady=10)
+# 1) Container for canvas + scrollbar
+container = tk.Frame(root)
+container.pack(fill="both", expand=True, padx=10, pady=10)
+
+# 2) Canvas itself
+canvas = tk.Canvas(container, borderwidth=0)
+canvas.pack(side="left", fill="both", expand=True)
+
+# 3) Vertical scrollbar
+vsb = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+vsb.pack(side="right", fill="y")
+canvas.configure(yscrollcommand=vsb.set)
+
+# 4) A frame inside the canvas which will actually hold the saved-parameter widgets
+saved_parameters_frame = tk.Frame(canvas)
+# Put that frame in the canvas’s scrolling region
+canvas.create_window((0, 0), window=saved_parameters_frame, anchor="nw")
+
+# 5) When the inner frame changes size, update scrollregion
+def on_frame_configure(event):
+    canvas.configure(scrollregion=canvas.bbox("all"))
+
+saved_parameters_frame.bind("<Configure>", on_frame_configure)
+
 saved_parameters = []  # Combined list for both numeric and ASCII parameters.
 def on_closing():
     for can_id in list(global_transmissions.keys()):
