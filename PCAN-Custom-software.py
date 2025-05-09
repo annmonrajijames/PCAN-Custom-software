@@ -42,7 +42,7 @@ def global_transmit(can_id):
     job = root.after(int(cycle_time_ms), lambda: global_transmit(can_id))
     global_transmissions[can_id]["job"] = job
 
-# ---------- Helper: Compute Slider Range for Numeric Parameters ----------
+# ---------- Helper: Compute Slider Range (for Numeric Parameters) ----------
 def compute_slider_range(config):
     if "min_value" in config and "max_value" in config:
         min_str = config["min_value"]
@@ -73,9 +73,14 @@ def compute_slider_range(config):
             else:
                 return -(2 ** (8 * num_bytes - 1)), (2 ** (8 * num_bytes - 1)) - 1, 1, 0
 
-# ===================== Numeric Parameter =====================
+# ==================== Numeric Parameter ====================
 class SavedParameter:
     def __init__(self, parent, config):
+        """
+        config keys:
+          name, can_id, size, type, resolution, mapping (list), 
+          target_byte (if bit), cycle_time, min_value, max_value, initial_value, mode ("numeric")
+        """
         self.parent = parent
         self.config = config.copy()
         self.enabled = False
@@ -194,6 +199,104 @@ class SavedParameter:
     def edit(self):
         open_parameter_editor(self)
 
+# ==================== ASCII Parameter ====================
+class ASCIISavedParameter:
+    def __init__(self, parent, config):
+        """
+        config keys:
+          name, can_id, size, mapping (list), cycle_time, mode ("ascii"),
+          initial_value (a string)
+        For ASCII parameters, size is "X byte" and mapping is a list of target byte positions.
+        """
+        self.parent = parent
+        self.config = config.copy()
+        self.enabled = False
+        self.value_var = tk.StringVar(value=config.get("initial_value", ""))
+        self.expected_length = int(config["size"].split()[0])
+        self.frame = tk.Frame(parent, bd=2, relief=tk.GROOVE, padx=5, pady=5)
+        self.label = tk.Label(self.frame, text=f"{config['name']} (CAN ID: {hex(config['can_id'])})")
+        self.label.grid(row=0, column=0, columnspan=3, sticky="w")
+        tk.Label(self.frame, text="Value:").grid(row=1, column=0, sticky="w")
+        self.entry = tk.Entry(self.frame, textvariable=self.value_var, width=10)
+        self.entry.grid(row=1, column=1, sticky="we")
+        tk.Label(self.frame, text=f"(max {self.expected_length} chars)").grid(row=1, column=2, sticky="w")
+        tk.Label(self.frame, text="Cycle Time (ms):").grid(row=2, column=0, sticky="w")
+        self.cycle_time_var = tk.StringVar(value=str(config.get("cycle_time", 1000)))
+        self.cycle_time_entry = tk.Entry(self.frame, textvariable=self.cycle_time_var, width=8)
+        self.cycle_time_entry.grid(row=2, column=1, sticky="we")
+        self.cycle_time_entry.bind("<FocusOut>", self.update_cycle_time)
+        self.enable_button = tk.Button(self.frame, text="Enable", command=self.toggle_enable, width=10)
+        self.enable_button.grid(row=3, column=0, padx=5, pady=5)
+        self.edit_button = tk.Button(self.frame, text="Edit", command=self.edit, width=10)
+        self.edit_button.grid(row=3, column=1, padx=5, pady=5)
+        self.frame.pack(fill="x", padx=5, pady=5)
+    def get_payload(self):
+        data_payload = [0] * 8
+        text = self.value_var.get()
+        text = (text + " " * self.expected_length)[:self.expected_length]
+        for i, byte_pos in enumerate(self.config["mapping"]):
+            if i < len(text):
+                data_payload[int(byte_pos)] = ord(text[i])
+        return data_payload
+    def update_cycle_time(self, event=None):
+        try:
+            new_cycle_time = float(self.cycle_time_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid cycle time")
+            return
+        self.config["cycle_time"] = new_cycle_time
+        if self.enabled:
+            can_id = self.config["can_id"]
+            if can_id in global_transmissions:
+                global_transmissions[can_id]["cycle_time"] = new_cycle_time
+                if global_transmissions[can_id]["job"]:
+                    root.after_cancel(global_transmissions[can_id]["job"])
+                global_transmit(can_id)
+                print(f"Updated cycle time for CAN ID {hex(can_id)} to {new_cycle_time} ms.")
+    def toggle_enable(self):
+        if not self.enabled:
+            try:
+                cycle_time_ms = float(self.cycle_time_var.get())
+            except ValueError:
+                messagebox.showerror("Error", "Invalid cycle time")
+                return
+            can_id = self.config["can_id"]
+            def param_func():
+                return self.get_payload()
+            self.param_func = param_func
+            print(f"Enabling ASCII parameter '{self.config['name']}' on CAN ID {hex(can_id)} with cycle time {cycle_time_ms} ms.")
+            if can_id in global_transmissions:
+                if global_transmissions[can_id]["cycle_time"] != cycle_time_ms:
+                    global_transmissions[can_id]["cycle_time"] = cycle_time_ms
+                    for sp in saved_parameters:
+                        if sp.enabled and sp.config["can_id"] == can_id:
+                            sp.cycle_time_var.set(str(cycle_time_ms))
+                    if global_transmissions[can_id]["job"]:
+                        root.after_cancel(global_transmissions[can_id]["job"])
+                    global_transmit(can_id)
+                global_transmissions[can_id]["params"].append(param_func)
+            else:
+                global_transmissions[can_id] = {"cycle_time": cycle_time_ms, "params": [param_func], "job": None}
+                global_transmit(can_id)
+            self.enabled = True
+            self.enable_button.config(text="Disable")
+        else:
+            can_id = self.config["can_id"]
+            if can_id in global_transmissions:
+                try:
+                    global_transmissions[can_id]["params"].remove(self.param_func)
+                    print(f"Disabling ASCII parameter '{self.config['name']}' on CAN ID {hex(can_id)}.")
+                except ValueError:
+                    pass
+                if not global_transmissions[can_id]["params"]:
+                    if global_transmissions[can_id]["job"]:
+                        root.after_cancel(global_transmissions[can_id]["job"])
+                    del global_transmissions[can_id]
+            self.enabled = False
+            self.enable_button.config(text="Enable")
+    def edit(self):
+        open_ascii_parameter_editor(self)
+
 # ---------- Numeric Parameter Editor ----------
 def open_parameter_editor(saved_param=None):
     editor = tk.Toplevel(root)
@@ -240,7 +343,8 @@ def open_parameter_editor(saved_param=None):
             num_bits = int(size_str.split()[0])
             tk.Label(mapping_frame, text="Select Bit Positions (order):").grid(row=0, column=0, columnspan=num_bits)
             for i in range(num_bits):
-                var = tk.StringVar(value="0")
+                default_value = str(num_bits - 1 - i)
+                var = tk.StringVar(value=default_value)
                 mapping_vars.append(var)
                 bit_menu = ttk.Combobox(mapping_frame, textvariable=var, values=[str(x) for x in range(8)],
                                         state="readonly", width=3)
@@ -249,7 +353,8 @@ def open_parameter_editor(saved_param=None):
             num_bytes = int(size_str.split()[0])
             tk.Label(mapping_frame, text="Select Byte Positions (order):").grid(row=0, column=0, columnspan=num_bytes)
             for i in range(num_bytes):
-                var = tk.StringVar(value="0")
+                default_value = str(num_bytes - 1 - i)
+                var = tk.StringVar(value=default_value)
                 mapping_vars.append(var)
                 byte_menu = ttk.Combobox(mapping_frame, textvariable=var, values=[str(x) for x in range(8)],
                                          state="readonly", width=3)
@@ -376,114 +481,7 @@ def add_saved_parameter(config):
     sp = SavedParameter(saved_parameters_frame, config)
     saved_parameters.append(sp)
 
-saved_parameters = []
-
-# ===================== ASCII Parameter =====================
-class ASCIISavedParameter:
-    def __init__(self, parent, config):
-        """
-        config is a dictionary with keys:
-          name, can_id, size, mapping (list), cycle_time, mode ("ascii"),
-          and initial_value (a string).
-        For ASCII parameters, size is one of "1 byte", "2 byte", ... "8 byte".
-        The mapping is a list of byte positions (one per character).
-        """
-        self.parent = parent
-        self.config = config.copy()
-        self.enabled = False
-        # For ASCII, we use a StringVar for the text value.
-        self.value_var = tk.StringVar(value=config.get("initial_value", ""))
-        # The expected length is determined by the size.
-        expected_length = int(config["size"].split()[0])
-        self.expected_length = expected_length
-        self.frame = tk.Frame(parent, bd=2, relief=tk.GROOVE, padx=5, pady=5)
-        self.label = tk.Label(self.frame, text=f"{config['name']} (CAN ID: {hex(config['can_id'])})")
-        self.label.grid(row=0, column=0, columnspan=3, sticky="w")
-        tk.Label(self.frame, text="Value:").grid(row=1, column=0, sticky="w")
-        # For ASCII parameters, use an Entry (no slider)
-        self.entry = tk.Entry(self.frame, textvariable=self.value_var, width=10)
-        self.entry.grid(row=1, column=1, sticky="we")
-        tk.Label(self.frame, text=f"(max {expected_length} chars)").grid(row=1, column=2, sticky="w")
-        tk.Label(self.frame, text="Cycle Time (ms):").grid(row=2, column=0, sticky="w")
-        self.cycle_time_var = tk.StringVar(value=str(config.get("cycle_time", 1000)))
-        self.cycle_time_entry = tk.Entry(self.frame, textvariable=self.cycle_time_var, width=8)
-        self.cycle_time_entry.grid(row=2, column=1, sticky="we")
-        self.cycle_time_entry.bind("<FocusOut>", self.update_cycle_time)
-        self.enable_button = tk.Button(self.frame, text="Enable", command=self.toggle_enable, width=10)
-        self.enable_button.grid(row=3, column=0, padx=5, pady=5)
-        self.edit_button = tk.Button(self.frame, text="Edit", command=self.edit, width=10)
-        self.edit_button.grid(row=3, column=1, padx=5, pady=5)
-        self.frame.pack(fill="x", padx=5, pady=5)
-    def get_payload(self):
-        """Convert the ASCII string into an 8-byte payload based on mapping."""
-        data_payload = [0] * 8
-        text = self.value_var.get()
-        # Force the string to be exactly expected_length characters (pad or truncate)
-        text = (text + " " * self.expected_length)[:self.expected_length]
-        # For each character, convert to its ASCII code and map it to the corresponding byte.
-        for i, byte_pos in enumerate(self.config["mapping"]):
-            if i < len(text):
-                data_payload[int(byte_pos)] = ord(text[i])
-        return data_payload
-    def update_cycle_time(self, event=None):
-        try:
-            new_cycle_time = float(self.cycle_time_var.get())
-        except ValueError:
-            messagebox.showerror("Error", "Invalid cycle time")
-            return
-        self.config["cycle_time"] = new_cycle_time
-        if self.enabled:
-            can_id = self.config["can_id"]
-            if can_id in global_transmissions:
-                global_transmissions[can_id]["cycle_time"] = new_cycle_time
-                if global_transmissions[can_id]["job"]:
-                    root.after_cancel(global_transmissions[can_id]["job"])
-                global_transmit(can_id)
-                print(f"Updated cycle time for CAN ID {hex(can_id)} to {new_cycle_time} ms.")
-    def toggle_enable(self):
-        if not self.enabled:
-            try:
-                cycle_time_ms = float(self.cycle_time_var.get())
-            except ValueError:
-                messagebox.showerror("Error", "Invalid cycle time")
-                return
-            can_id = self.config["can_id"]
-            def param_func():
-                return self.get_payload()
-            self.param_func = param_func
-            print(f"Enabling ASCII parameter '{self.config['name']}' on CAN ID {hex(can_id)} with cycle time {cycle_time_ms} ms.")
-            if can_id in global_transmissions:
-                if global_transmissions[can_id]["cycle_time"] != cycle_time_ms:
-                    global_transmissions[can_id]["cycle_time"] = cycle_time_ms
-                    for sp in ascii_saved_parameters:
-                        if sp.enabled and sp.config["can_id"] == can_id:
-                            sp.cycle_time_var.set(str(cycle_time_ms))
-                    if global_transmissions[can_id]["job"]:
-                        root.after_cancel(global_transmissions[can_id]["job"])
-                    global_transmit(can_id)
-                global_transmissions[can_id]["params"].append(param_func)
-            else:
-                global_transmissions[can_id] = {"cycle_time": cycle_time_ms, "params": [param_func], "job": None}
-                global_transmit(can_id)
-            self.enabled = True
-            self.enable_button.config(text="Disable")
-        else:
-            can_id = self.config["can_id"]
-            if can_id in global_transmissions:
-                try:
-                    global_transmissions[can_id]["params"].remove(self.param_func)
-                    print(f"Disabling ASCII parameter '{self.config['name']}' on CAN ID {hex(can_id)}.")
-                except ValueError:
-                    pass
-                if not global_transmissions[can_id]["params"]:
-                    if global_transmissions[can_id]["job"]:
-                        root.after_cancel(global_transmissions[can_id]["job"])
-                    del global_transmissions[can_id]
-            self.enabled = False
-            self.enable_button.config(text="Enable")
-    def edit(self):
-        open_ascii_parameter_editor(self)
-
+# =================== ASCII Parameter Editor ===================
 def open_ascii_parameter_editor(saved_param=None):
     editor = tk.Toplevel(root)
     editor.title("ASCII Parameter Editor")
@@ -508,7 +506,8 @@ def open_ascii_parameter_editor(saved_param=None):
         tk.Label(mapping_frame, text="Select Byte Positions (order):").grid(row=0, column=0, columnspan=num_bytes)
         mapping_vars = []
         for i in range(num_bytes):
-            var = tk.StringVar(value="0")
+            default_value = str(num_bytes - 1 - i)
+            var = tk.StringVar(value=default_value)
             mapping_vars.append(var)
             byte_menu = ttk.Combobox(mapping_frame, textvariable=var, values=[str(x) for x in range(8)],
                                      state="readonly", width=3)
@@ -517,10 +516,8 @@ def open_ascii_parameter_editor(saved_param=None):
     size_var.trace("w", update_mapping_options)
     update_mapping_options()
     tk.Label(editor, text="Parameter Value:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
-    # For ASCII, parameter value is a text entry.
     value_entry = tk.Entry(editor, width=10)
     value_entry.grid(row=4, column=1, padx=5, pady=2)
-    # Enforce max length equal to parameter size.
     def enforce_length(*args):
         expected = int(size_var.get().split()[0])
         text = value_entry.get()
@@ -569,7 +566,6 @@ def open_ascii_parameter_editor(saved_param=None):
             saved_param.config = new_config
             saved_param.cycle_time_var.set(str(new_config["cycle_time"]))
             saved_param.label.config(text=f"{new_config['name']} (CAN ID: {hex(new_config['can_id'])})")
-            # Update expected length.
             saved_param.expected_length = int(new_config["size"].split()[0])
         else:
             add_ascii_saved_parameter(new_config)
@@ -577,104 +573,11 @@ def open_ascii_parameter_editor(saved_param=None):
     save_button = tk.Button(editor, text="Save", command=save_edits)
     save_button.grid(row=6, column=0, columnspan=3, pady=10)
 
-class ASCIISavedParameter:
-    def __init__(self, parent, config):
-        self.parent = parent
-        self.config = config.copy()
-        self.enabled = False
-        self.value_var = tk.StringVar(value=config.get("initial_value", ""))
-        self.expected_length = int(config["size"].split()[0])
-        self.frame = tk.Frame(parent, bd=2, relief=tk.GROOVE, padx=5, pady=5)
-        self.label = tk.Label(self.frame, text=f"{config['name']} (CAN ID: {hex(config['can_id'])})")
-        self.label.grid(row=0, column=0, columnspan=3, sticky="w")
-        tk.Label(self.frame, text="Value:").grid(row=1, column=0, sticky="w")
-        self.entry = tk.Entry(self.frame, textvariable=self.value_var, width=10)
-        self.entry.grid(row=1, column=1, sticky="we")
-        tk.Label(self.frame, text=f"(max {self.expected_length} chars)").grid(row=1, column=2, sticky="w")
-        tk.Label(self.frame, text="Cycle Time (ms):").grid(row=2, column=0, sticky="w")
-        self.cycle_time_var = tk.StringVar(value=str(config.get("cycle_time", 1000)))
-        self.cycle_time_entry = tk.Entry(self.frame, textvariable=self.cycle_time_var, width=8)
-        self.cycle_time_entry.grid(row=2, column=1, sticky="we")
-        self.cycle_time_entry.bind("<FocusOut>", self.update_cycle_time)
-        self.enable_button = tk.Button(self.frame, text="Enable", command=self.toggle_enable, width=10)
-        self.enable_button.grid(row=3, column=0, padx=5, pady=5)
-        self.edit_button = tk.Button(self.frame, text="Edit", command=self.edit, width=10)
-        self.edit_button.grid(row=3, column=1, padx=5, pady=5)
-        self.frame.pack(fill="x", padx=5, pady=5)
-    def get_payload(self):
-        data_payload = [0] * 8
-        text = self.value_var.get()
-        text = (text + " " * self.expected_length)[:self.expected_length]
-        for i, byte_pos in enumerate(self.config["mapping"]):
-            if i < len(text):
-                data_payload[int(byte_pos)] = ord(text[i])
-        return data_payload
-    def update_cycle_time(self, event=None):
-        try:
-            new_cycle_time = float(self.cycle_time_var.get())
-        except ValueError:
-            messagebox.showerror("Error", "Invalid cycle time")
-            return
-        self.config["cycle_time"] = new_cycle_time
-        if self.enabled:
-            can_id = self.config["can_id"]
-            if can_id in global_transmissions:
-                global_transmissions[can_id]["cycle_time"] = new_cycle_time
-                if global_transmissions[can_id]["job"]:
-                    root.after_cancel(global_transmissions[can_id]["job"])
-                global_transmit(can_id)
-                print(f"Updated cycle time for CAN ID {hex(can_id)} to {new_cycle_time} ms.")
-    def toggle_enable(self):
-        if not self.enabled:
-            try:
-                cycle_time_ms = float(self.cycle_time_var.get())
-            except ValueError:
-                messagebox.showerror("Error", "Invalid cycle time")
-                return
-            can_id = self.config["can_id"]
-            def param_func():
-                return self.get_payload()
-            self.param_func = param_func
-            print(f"Enabling ASCII parameter '{self.config['name']}' on CAN ID {hex(can_id)} with cycle time {cycle_time_ms} ms.")
-            if can_id in global_transmissions:
-                if global_transmissions[can_id]["cycle_time"] != cycle_time_ms:
-                    global_transmissions[can_id]["cycle_time"] = cycle_time_ms
-                    for sp in ascii_saved_parameters:
-                        if sp.enabled and sp.config["can_id"] == can_id:
-                            sp.cycle_time_var.set(str(cycle_time_ms))
-                    if global_transmissions[can_id]["job"]:
-                        root.after_cancel(global_transmissions[can_id]["job"])
-                    global_transmit(can_id)
-                global_transmissions[can_id]["params"].append(param_func)
-            else:
-                global_transmissions[can_id] = {"cycle_time": cycle_time_ms, "params": [param_func], "job": None}
-                global_transmit(can_id)
-            self.enabled = True
-            self.enable_button.config(text="Disable")
-        else:
-            can_id = self.config["can_id"]
-            if can_id in global_transmissions:
-                try:
-                    global_transmissions[can_id]["params"].remove(self.param_func)
-                    print(f"Disabling ASCII parameter '{self.config['name']}' on CAN ID {hex(can_id)}.")
-                except ValueError:
-                    pass
-                if not global_transmissions[can_id]["params"]:
-                    if global_transmissions[can_id]["job"]:
-                        root.after_cancel(global_transmissions[can_id]["job"])
-                    del global_transmissions[can_id]
-            self.enabled = False
-            self.enable_button.config(text="Enable")
-    def edit(self):
-        open_ascii_parameter_editor(self)
-
 def add_ascii_saved_parameter(config):
-    sp = ASCIISavedParameter(ascii_saved_parameters_frame, config)
-    ascii_saved_parameters.append(sp)
+    sp = ASCIISavedParameter(saved_parameters_frame, config)
+    saved_parameters.append(sp)
 
-ascii_saved_parameters = []
-
-# ===================== Main Window Setup =====================
+# ================= Main Window Setup =================
 root = tk.Tk()
 root.title("CAN Parameter Creator")
 top_frame = tk.Frame(root)
@@ -683,10 +586,9 @@ create_numeric_button = tk.Button(top_frame, text="Create Parameter", command=op
 create_numeric_button.pack(side="left", padx=5)
 create_ascii_button = tk.Button(top_frame, text="Create ASCII parameter", command=open_ascii_parameter_editor, width=20)
 create_ascii_button.pack(side="left", padx=5)
-saved_parameters_frame = tk.LabelFrame(root, text="Saved Numeric Parameters", padx=5, pady=5)
+saved_parameters_frame = tk.LabelFrame(root, text="Saved Parameters", padx=5, pady=5)
 saved_parameters_frame.pack(fill="both", expand=True, padx=10, pady=10)
-ascii_saved_parameters_frame = tk.LabelFrame(root, text="Saved ASCII Parameters", padx=5, pady=5)
-ascii_saved_parameters_frame.pack(fill="both", expand=True, padx=10, pady=10)
+saved_parameters = []  # Combined list for both numeric and ASCII parameters.
 def on_closing():
     for can_id in list(global_transmissions.keys()):
         if global_transmissions[can_id]["job"]:
